@@ -33,7 +33,7 @@ WARN_TAG  = f"{Fore.YELLOW}[{Fore.WHITE}~{Fore.YELLOW}]{Style.RESET_ALL}"
 DONE_TAG  = f"{Fore.GREEN}[{Fore.WHITE}✔{Fore.GREEN}]{Style.RESET_ALL}"
 HTTP_TAG  = f"{Fore.BLUE}[{Fore.WHITE}H{Fore.BLUE}]{Style.RESET_ALL}"
 
-DIM   = "\033[2m"
+DIM = "\033[2m"
 RESET = Style.RESET_ALL
 
 

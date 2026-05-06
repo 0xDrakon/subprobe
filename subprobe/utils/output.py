@@ -5,16 +5,15 @@ import threading
 import time
 from typing import Optional
 
-from colorama import Fore, Style
+from colorama import Fore
 
 from ..banner import (
-    FOUND_TAG, HTTP_TAG, INFO_TAG, DONE_TAG, WARN_TAG, ERROR_TAG,
+    FOUND_TAG, INFO_TAG, WARN_TAG, ERROR_TAG,
     status_color, dim, sep, RESET,
 )
 from ..core.scanner import ScanResult, ScanStats
 
 _print_lock = threading.Lock()
-_current_progress = ""
 _scan_start: float = 0.0
 
 
@@ -30,12 +29,10 @@ def _erase() -> None:
 def print_result(result: ScanResult, verbose: bool = False) -> None:
     with _print_lock:
         _erase()
-
         if verbose:
             _print_verbose(result)
         else:
             _print_compact(result)
-
         sys.stdout.flush()
 
 
@@ -49,15 +46,14 @@ def _print_compact(r: ScanResult) -> None:
     line = f"{FOUND_TAG} {Fore.GREEN}{r.subdomain}{RESET}  {Fore.CYAN}{ip_str}{RESET}"
     if r.cname:
         line += f"  {Fore.YELLOW}↳ {dim(r.cname)}{RESET}"
-
     print(line)
 
     if r.http_status is not None or r.https_status is not None:
         parts = []
-        if r.http_status:
+        if r.http_status is not None:
             col = status_color(r.http_status)
             parts.append(f"http:{col}{r.http_status}{RESET}")
-        if r.https_status:
+        if r.https_status is not None:
             col = status_color(r.https_status)
             parts.append(f"https:{col}{r.https_status}{RESET}")
         title_str = f'  {Fore.WHITE}"{r.title[:60]}"{RESET}' if r.title else ""
@@ -66,8 +62,6 @@ def _print_compact(r: ScanResult) -> None:
 
 def _print_verbose(r: ScanResult) -> None:
     print(f"{FOUND_TAG} {Fore.GREEN}{r.subdomain}{RESET}")
-
-    all_ips = r.ips + ([f"{Fore.CYAN}[IPv6]{RESET} " + ip for ip in r.ipv6] if r.ipv6 else [])
     print(f"    {Fore.WHITE}├─ IPv4    {RESET}  {Fore.CYAN}{', '.join(r.ips)}{RESET}")
 
     if r.ipv6:
@@ -76,7 +70,7 @@ def _print_verbose(r: ScanResult) -> None:
     if r.cname:
         print(f"    {Fore.WHITE}├─ CNAME   {RESET}  {Fore.YELLOW}{r.cname}{RESET}")
 
-    ttl_str = f"{r.ttl}s" if r.ttl is not None else "—"
+    ttl_str = f"{r.ttl}s" if r.ttl is not None else "n/a"
     print(
         f"    {Fore.WHITE}├─ TTL     {RESET}  {Fore.WHITE}{ttl_str}{RESET}"
         f"    {dim(f'DNS: {r.dns_ms:.0f}ms')}"
@@ -87,34 +81,30 @@ def _print_verbose(r: ScanResult) -> None:
             if code is None:
                 return
             col = status_color(code)
-            size_str = _human_size(size)
             print(
                 f"    {Fore.WHITE}├─ {proto:<7}{RESET}"
                 f"  {col}{code}{RESET}"
                 f"  {dim(f'{ms:.0f}ms')}"
-                f"  {dim(size_str)}"
+                f"  {dim(_human_size(size))}"
             )
-        _http_line("HTTP", r.http_status, r.http_ms, r.http_size)
+        _http_line("HTTP",  r.http_status,  r.http_ms,  r.http_size)
         _http_line("HTTPS", r.https_status, r.https_ms, r.https_size)
 
     if r.title:
         print(f"    {Fore.WHITE}└─ Title   {RESET}  {Fore.WHITE}\"{r.title}\"{RESET}")
-    else:
-        pass
 
 
 def _human_size(n: int) -> str:
     if n == 0:
         return "0 B"
-    for unit in ("B", "KB", "MB"):
-        if n < 1024:
-            return f"{n:.0f} {unit}"
-        n //= 1024
-    return f"{n:.0f} GB"
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024:
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
 
 def update_progress(scanned: int, total: int, found: int) -> None:
-    global _current_progress
-
     pct = (scanned / total * 100) if total else 0
     bar_len = 28
     filled = int(bar_len * scanned / total) if total else 0
@@ -122,7 +112,7 @@ def update_progress(scanned: int, total: int, found: int) -> None:
     bar = f"{Fore.GREEN}{'█' * filled}{Fore.WHITE}{'░' * (bar_len - filled)}{RESET}"
 
     eta_str = ""
-    if _scan_start and scanned > 0 and scanned < total:
+    if _scan_start and 0 < scanned < total:
         elapsed = time.perf_counter() - _scan_start
         rate = scanned / elapsed
         remaining = (total - scanned) / rate if rate > 0 else 0
@@ -135,7 +125,6 @@ def update_progress(scanned: int, total: int, found: int) -> None:
         f"{FOUND_TAG} {Fore.GREEN}{found}{RESET}"
         f"{eta_str}"
     )
-    _current_progress = progress
     sys.stderr.write(progress)
     sys.stderr.flush()
 
@@ -161,7 +150,6 @@ def print_scan_header(
     verbose: bool,
 ) -> None:
     width = 60
-
     print(sep(width=width))
 
     def row(label: str, value: str) -> None:
@@ -179,13 +167,13 @@ def print_scan_header(
             if wildcard_detected
             else f"{Fore.GREEN}not detected{RESET}"
         )
-        row("Wildcard DNS",  wc)
+        row("Wildcard DNS", wc)
 
     row("HTTP Probe",   f"{Fore.GREEN}enabled{RESET}" if probe_http else f"{Fore.RED}disabled{RESET}")
     if probe_http:
-        row("Redirects",    f"{Fore.GREEN}follow{RESET}" if follow_redirects else f"{Fore.RED}no-follow{RESET}")
+        row("Redirects", f"{Fore.GREEN}follow{RESET}" if follow_redirects else f"{Fore.RED}no-follow{RESET}")
     if probe_aaaa:
-        row("IPv6 (AAAA)",  f"{Fore.GREEN}enabled{RESET}")
+        row("IPv6 (AAAA)", f"{Fore.GREEN}enabled{RESET}")
     if filter_status:
         row("Filter codes", f"{Fore.RED}{', '.join(str(c) for c in sorted(filter_status))}{RESET}")
     if match_status:
@@ -197,7 +185,7 @@ def print_scan_header(
     if output_file:
         row("Output (txt)", f"{Fore.CYAN}{output_file}{RESET}")
     if json_file:
-        row("Output (json)",f"{Fore.CYAN}{json_file}{RESET}")
+        row("Output (json)", f"{Fore.CYAN}{json_file}{RESET}")
     if csv_file:
         row("Output (csv)", f"{Fore.CYAN}{csv_file}{RESET}")
 
@@ -211,7 +199,9 @@ def print_summary(
     output_file: Optional[str],
     json_file: Optional[str],
     csv_file: Optional[str],
+    saved: Optional[dict[str, str]] = None,
 ) -> None:
+
     _erase()
     width = 60
     print()
@@ -222,25 +212,44 @@ def print_summary(
     def row(label: str, value: str) -> None:
         print(f"  {Fore.CYAN}{label:<16}{RESET}  {value}")
 
-    row("Status",    f"{Fore.GREEN}scan complete{RESET}")
-    row("Scanned",   f"{Fore.WHITE}{stats.total:,}{RESET}")
-    row("Found",     f"{Fore.GREEN}{stats.found:,}{RESET}")
+    row("Status",   f"{Fore.GREEN}scan complete{RESET}")
+    row("Scanned",  f"{Fore.WHITE}{stats.total:,}{RESET}")
+    row("Found",    f"{Fore.GREEN}{stats.found:,}{RESET}")
     if stats.wildcard_filtered:
         row("WC Filtered", f"{Fore.YELLOW}{stats.wildcard_filtered:,}{RESET}")
-    row("Elapsed",   f"{Fore.YELLOW}{stats.elapsed:.2f}s{RESET}  {dim(f'({rate:.0f} req/s)')}")
+    row("Elapsed",  f"{Fore.YELLOW}{stats.elapsed:.2f}s{RESET}  {dim(f'({rate:.0f} req/s)')}")
 
-    if output_file and results:
-        write_txt(results, output_file)
-        row("Saved (txt)", f"{Fore.CYAN}{output_file}{RESET}")
-    if json_file and results:
-        write_json(results, json_file)
-        row("Saved (json)", f"{Fore.CYAN}{json_file}{RESET}")
-    if csv_file and results:
-        write_csv(results, csv_file)
-        row("Saved (csv)", f"{Fore.CYAN}{csv_file}{RESET}")
+    if saved:
+        if saved.get("txt"):
+            row("Saved (txt)",  f"{Fore.CYAN}{saved['txt']}{RESET}")
+        if saved.get("json"):
+            row("Saved (json)", f"{Fore.CYAN}{saved['json']}{RESET}")
+        if saved.get("csv"):
+            row("Saved (csv)",  f"{Fore.CYAN}{saved['csv']}{RESET}")
 
     print(sep(width=width))
     print()
+
+
+def save_outputs(
+    results: list[ScanResult],
+    output_file: Optional[str],
+    json_file: Optional[str],
+    csv_file: Optional[str],
+) -> dict[str, str]:
+
+    saved: dict[str, str] = {}
+    if output_file and results:
+        write_txt(results, output_file)
+        saved["txt"] = output_file
+    if json_file and results:
+        write_json(results, json_file)
+        saved["json"] = json_file
+    if csv_file and results:
+        write_csv(results, csv_file)
+        saved["csv"] = csv_file
+    return saved
+
 
 def write_txt(results: list[ScanResult], path: str) -> None:
     with open(path, "w", encoding="utf-8") as f:
@@ -252,9 +261,9 @@ def write_txt(results: list[ScanResult], path: str) -> None:
                 parts.append(f"cname:{r.cname}")
             if r.ttl is not None:
                 parts.append(f"ttl:{r.ttl}")
-            if r.http_status:
+            if r.http_status is not None:
                 parts.append(f"http:{r.http_status}")
-            if r.https_status:
+            if r.https_status is not None:
                 parts.append(f"https:{r.https_status}")
             if r.title:
                 parts.append(f"title:{r.title}")
@@ -262,9 +271,8 @@ def write_txt(results: list[ScanResult], path: str) -> None:
 
 
 def write_json(results: list[ScanResult], path: str) -> None:
-    data = []
-    for r in results:
-        data.append({
+    data = [
+        {
             "subdomain":    r.subdomain,
             "ips":          r.ips,
             "ipv6":         r.ipv6,
@@ -278,7 +286,9 @@ def write_json(results: list[ScanResult], path: str) -> None:
             "https_ms":     round(r.https_ms, 1),
             "http_size":    r.http_size,
             "https_size":   r.https_size,
-        })
+        }
+        for r in results
+    ]
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
@@ -300,8 +310,8 @@ def write_csv(results: list[ScanResult], path: str) -> None:
                 "cname":        r.cname or "",
                 "ttl":          r.ttl if r.ttl is not None else "",
                 "dns_ms":       round(r.dns_ms, 1),
-                "http_status":  r.http_status or "",
-                "https_status": r.https_status or "",
+                "http_status":  r.http_status if r.http_status is not None else "",
+                "https_status": r.https_status if r.https_status is not None else "",
                 "title":        r.title or "",
                 "http_ms":      round(r.http_ms, 1),
                 "https_ms":     round(r.https_ms, 1),
@@ -309,13 +319,12 @@ def write_csv(results: list[ScanResult], path: str) -> None:
                 "https_size":   r.https_size,
             })
 
+
 def print_info(msg: str) -> None:
     print(f"{INFO_TAG} {msg}")
 
 
 def print_warn(msg: str) -> None:
     print(f"{WARN_TAG} {Fore.YELLOW}{msg}{RESET}")
-
-
 def print_error(msg: str) -> None:
     print(f"{ERROR_TAG} {Fore.RED}{msg}{RESET}")

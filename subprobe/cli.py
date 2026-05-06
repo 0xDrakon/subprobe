@@ -1,12 +1,13 @@
 import argparse
 import asyncio
 import os
+import re
 import sys
 import time
 from typing import Optional
 
 import colorama
-from colorama import Fore, Style
+from colorama import Fore
 
 from .banner import BANNER, RESET, sep
 from .core.resolver import build_resolver, detect_wildcard
@@ -16,13 +17,10 @@ from .utils.output import (
     update_progress,
     print_summary,
     print_scan_header,
-    print_info,
     print_warn,
     print_error,
     set_scan_start,
-    write_txt,
-    write_json,
-    write_csv,
+    save_outputs,
 )
 
 DEFAULT_WORDLIST = os.path.join(
@@ -31,11 +29,15 @@ DEFAULT_WORDLIST = os.path.join(
 
 DEFAULT_NAMESERVERS = ["1.1.1.1", "8.8.8.8", "9.9.9.9", "208.67.222.222"]
 
+_DOMAIN_RE = re.compile(
+    r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$"
+)
+
 
 def _wl_count() -> str:
     try:
         with open(DEFAULT_WORDLIST) as f:
-            return str(sum(1 for l in f if l.strip() and not l.startswith("#")))
+            return str(sum(1 for ln in f if ln.strip() and not ln.startswith("#")))
     except Exception:
         return "?"
 
@@ -100,9 +102,9 @@ def _build_parser() -> argparse.ArgumentParser:
     grp.add_argument("--user-agent", default=DEFAULT_UA, metavar="UA",
                      help="custom User-Agent string for HTTP requests")
     grp.add_argument("--filter-status", metavar="CODES",
-                     help="exclude results with these HTTP codes  (e.g. 404,403)")
+                     help="exclude results with these HTTP codes  (e.g. 404,403)  requires --http")
     grp.add_argument("--match-status", metavar="CODES",
-                     help="only show results with these HTTP codes  (e.g. 200,301)")
+                     help="only show results with these HTTP codes  (e.g. 200,301)  requires --http")
     grp.add_argument("--match-ip", metavar="IP",
                      help="only show subdomains resolving to this IP")
 
@@ -114,11 +116,11 @@ def _build_parser() -> argparse.ArgumentParser:
     grp.add_argument("--csv", metavar="FILE", dest="csv_file",
                      help="save results as CSV")
     grp.add_argument("-v", "--verbose", action="store_true",
-                     help="verbose output show TTL, timing, response size, all IPs")
+                     help="verbose output — TTL, timing, response size, all IPs")
     grp.add_argument("-q", "--quiet", action="store_true",
                      help="suppress banner and scan header, show results + summary only")
     grp.add_argument("--silent", action="store_true",
-                     help="print found subdomains only no decorations (pipe-friendly)")
+                     help="print found subdomains only, no decorations (pipe-friendly)")
     grp.add_argument("--no-color", action="store_true",
                      help="disable colored output")
 
@@ -129,13 +131,13 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _parse_codes(raw: Optional[str]) -> Optional[set[int]]:
+def _parse_codes(raw: Optional[str], flag: str) -> Optional[set[int]]:
     if not raw:
         return None
     try:
         return {int(c.strip()) for c in raw.split(",") if c.strip()}
     except ValueError:
-        print_error(f"Invalid status codes: {raw!r}")
+        print_error(f"Invalid status codes for {flag}: {raw!r}")
         sys.exit(1)
 
 
@@ -155,7 +157,7 @@ def load_resolvers(path: Optional[str]) -> list[str]:
     if not path:
         return DEFAULT_NAMESERVERS
     if not os.path.isfile(path):
-        print_warn(f"Resolver file not found: {path} - using defaults.")
+        print_warn(f"Resolver file not found: {path} — using defaults.")
         return DEFAULT_NAMESERVERS
     with open(path, "r", encoding="utf-8") as f:
         servers = [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
@@ -170,30 +172,37 @@ def main() -> None:
     if args.no_color:
         colorama.deinit()
 
-    quiet  = args.quiet or args.silent
     silent = args.silent
+    quiet  = args.quiet or silent
 
     if not quiet:
         print(BANNER)
 
-    wordlist    = load_wordlist(args.wordlist)
+    if not _DOMAIN_RE.match(args.domain):
+        print_error(f"Invalid domain: {args.domain!r}  (expected e.g. example.com)")
+        sys.exit(1)
+
+    if args.filter_status and not args.http:
+        print_warn("--filter-status has no effect without --http")
+    if args.match_status and not args.http:
+        print_warn("--match-status has no effect without --http")
+
+    wordlist = load_wordlist(args.wordlist)
     if args.append:
         extra = load_wordlist(args.append, "Append wordlist")
         seen  = set(wordlist)
         wordlist += [w for w in extra if w not in seen]
 
-    nameservers    = load_resolvers(args.resolvers)
-    filter_status  = _parse_codes(args.filter_status)
-    match_status   = _parse_codes(args.match_status)
+    nameservers   = load_resolvers(args.resolvers)
+    filter_status = _parse_codes(args.filter_status, "--filter-status")
+    match_status  = _parse_codes(args.match_status,  "--match-status")
 
     wildcard_ips: Optional[set[str]] = None
     wildcard_detected = False
 
     if not args.no_wildcard:
         if not silent:
-            sys.stderr.write(
-                f"\r {Fore.CYAN}▸{RESET} Checking for wildcard DNS...{RESET}"
-            )
+            sys.stderr.write(f"\r {Fore.CYAN}▸{RESET} Checking for wildcard DNS...")
             sys.stderr.flush()
 
         resolver = build_resolver(nameservers, timeout=args.timeout, retries=args.retries)
@@ -243,11 +252,12 @@ def main() -> None:
             verbose=args.verbose,
         )
 
-    found_count = [0]
+    found_count = 0
     set_scan_start(time.perf_counter())
 
     def on_found(result: ScanResult) -> None:
-        found_count[0] += 1
+        nonlocal found_count
+        found_count += 1
         if silent:
             print(result.subdomain, flush=True)
         else:
@@ -255,7 +265,7 @@ def main() -> None:
 
     def on_progress(scanned: int, total: int) -> None:
         if not silent:
-            update_progress(scanned, total, found_count[0])
+            update_progress(scanned, total, found_count)
 
     try:
         results, stats = asyncio.run(
@@ -285,15 +295,10 @@ def main() -> None:
             print_warn("Scan interrupted.")
         sys.exit(0)
 
-    if silent:
-        if args.output and results:
-            write_txt(results, args.output)
-        if args.json_file and results:
-            write_json(results, args.json_file)
-        if args.csv_file and results:
-            write_csv(results, args.csv_file)
-    else:
-        print_summary(stats, results, args.output, args.json_file, args.csv_file)
+    saved = save_outputs(results, args.output, args.json_file, args.csv_file)
+
+    if not silent:
+        print_summary(stats, results, args.output, args.json_file, args.csv_file, saved=saved)
 
     colorama.deinit()
 

@@ -6,7 +6,7 @@ from typing import Optional, Callable
 
 import aiohttp
 
-from .resolver import resolve_a, resolve_aaaa, resolve_cname, build_resolver
+from .resolver import resolve_a, resolve_aaaa, build_resolver
 
 _TITLE_RE = re.compile(r"<title[^>]*>([^<]{1,120})</title>", re.IGNORECASE)
 
@@ -15,6 +15,8 @@ DEFAULT_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/124.0 Safari/537.36"
 )
+
+_TASK_BATCH = 1000
 
 
 @dataclass
@@ -50,7 +52,6 @@ async def _fetch(
     timeout: int,
     follow_redirects: bool,
 ) -> tuple[Optional[int], Optional[str], int, float]:
-    """Returns (status, title, size_bytes, elapsed_ms)."""
     t0 = time.perf_counter()
     try:
         async with session.get(
@@ -91,13 +92,12 @@ async def _scan_one(
     match_ip: Optional[str],
 ) -> Optional[ScanResult]:
     async with semaphore:
-        ips, ttl, dns_ms = await resolve_a(subdomain, resolver)
+        ips, ttl, dns_ms, cname = await resolve_a(subdomain, resolver)
         if not ips:
             return None
 
-        if wildcard_ips and set(ips) == wildcard_ips:
-            result = ScanResult(subdomain=subdomain, ips=ips, ttl=ttl, dns_ms=dns_ms, wildcard=True)
-            return result
+        if wildcard_ips and set(ips) & wildcard_ips:
+            return ScanResult(subdomain=subdomain, ips=ips, ttl=ttl, dns_ms=dns_ms, wildcard=True)
 
         if match_ip and match_ip not in ips:
             return None
@@ -106,7 +106,6 @@ async def _scan_one(
         if probe_aaaa:
             ipv6 = await resolve_aaaa(subdomain, resolver) or []
 
-        cname = await resolve_cname(subdomain, resolver)
         result = ScanResult(
             subdomain=subdomain,
             ips=ips,
@@ -200,7 +199,9 @@ async def run_scan(
             on_progress(stats.scanned, stats.total)
 
     try:
-        await asyncio.gather(*[asyncio.create_task(_worker(w)) for w in wordlist])
+        for i in range(0, len(wordlist), _TASK_BATCH):
+            batch = wordlist[i : i + _TASK_BATCH]
+            await asyncio.gather(*[asyncio.create_task(_worker(w)) for w in batch])
     finally:
         if session:
             await session.close()

@@ -11,7 +11,7 @@
 **Fast, async subdomain enumeration tool built in Python.**
 Designed for security researchers and penetration testers who need reliable, high-speed subdomain discovery with clean, readable output.
 
-![subprobe in action](https://media.discordapp.net/attachments/1500215146717380831/1501432151621636146/image.png?ex=69fc0d28&is=69fabba8&hm=a4ad0888450d035e3db9e98aae524b0ae5077c06de90cc2e287d4e506bcf63cb&=&format=webp&quality=lossless)
+![subprobe in action](https://files.catbox.moe/yekmr1.png)
 
 ---
 
